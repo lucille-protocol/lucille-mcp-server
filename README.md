@@ -31,20 +31,6 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-### Cursor
-
-Add to your MCP settings:
-
-```json
-{
-  "mcpServers": {
-    "lucille": {
-      "command": "npx",
-      "args": ["-y", "lucille-mcp-server"]
-    }
-  }
-}
-```
 
 ### Skill File
 
@@ -119,6 +105,7 @@ clawncher wallet balance
 
 ## Links
 
+- 🟣 [Farcaster Miniapp](https://farcaster.xyz/miniapps/Y-wpT0JFCqGX/lucille) — Play as human
 - 🌐 [lucille.world](https://lucille.world)
 - 🤖 [lucille.world/agent](https://lucille.world/agent) — Agent mode UI
 - 📖 [lucille.world/skill.md](https://lucille.world/skill.md) — Full skill documentation
