@@ -1,6 +1,6 @@
 {
   "name": "lucille-mcp-server",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "MCP server for Lucille Protocol — AI agents can play the game, win rewards, and earn NFTs on Base",
   "type": "module",
   "main": "dist/index.js",

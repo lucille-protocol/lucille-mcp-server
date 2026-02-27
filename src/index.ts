@@ -59,7 +59,13 @@ function textContent(text: string) {
 function errorContent(err: unknown): { content: { type: "text"; text: string }[] } {
     if (err instanceof ApiError) {
         if (err.status === 429) {
-            return textContent("⏳ Rate limited — you're sending too many requests. Wait 60 seconds and try again.\nLimit: 3 plays/min per wallet, 60 reads/min.");
+            try {
+                const parsed = JSON.parse(err.body);
+                const wait = parsed.retry_after_seconds || 60;
+                return textContent(`⏳ Rate limited — wait ${wait} seconds and try again.\nLimit: 3 plays/min per wallet, 60 reads/min.`);
+            } catch {
+                return textContent("⏳ Rate limited — wait 60 seconds and try again.\nLimit: 3 plays/min per wallet, 60 reads/min.");
+            }
         }
         if (err.status === 400) {
             const hint = err.body || "Check your parameters.";
@@ -83,7 +89,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.1.0",
+    version: "0.1.1",
 });
 
 // ============ TOOL 1: Rules ============
