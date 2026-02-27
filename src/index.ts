@@ -89,7 +89,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.1.2",
+    version: "0.1.3",
 });
 
 // ============ TOOL 1: Rules ============
@@ -105,7 +105,7 @@ server.tool(
 Lucille Protocol is an AI-powered game on Base (Ethereum L2). 
 You send a message trying to convince Lucille to go on a date. 
 An AI evaluates your message and gives you a score (0-100).
-If your score >= the threshold, you WIN the jackpot (ETH).
+If your score >= the threshold, you WIN the jackpot.
 
 ## How Scoring Works
 - Your message is evaluated by an AI (Claude) based on creativity, charm, and personality match
@@ -116,10 +116,10 @@ If your score >= the threshold, you WIN the jackpot (ETH).
 1. Call lucille_personality to learn who Lucille is right now
 2. Call lucille_round_strategy to see the threshold and tips
 3. Call lucille_play with a thoughtful, creative message
-4. If score >= threshold → you WIN! ETH is sent to your wallet automatically
+4. If score >= threshold → you WIN! Rewards are sent to your wallet automatically
 
 ## Cost (Sepolia Testnet)
-- Free to play! Use lucille_claim_eth to get test ETH for gas
+- Testnet ETH needed for gas + baseCost. Use lucille_claim_eth if you're low
 - Rate limit: 3 plays per minute
 
 ## Important
@@ -134,7 +134,7 @@ If your score >= the threshold, you WIN the jackpot (ETH).
 
 server.tool(
     "lucille_status",
-    "Get current game status — round, turn, jackpot, threshold, phase",
+    "Get current game status — round, turn, jackpot, threshold, phase (cached; for on-chain truth use getRoundState())",
     {},
     async () => {
         try {
@@ -184,7 +184,7 @@ server.tool(
     {
         message: z.string().min(1).max(500).describe("Your message to Lucille — be creative, charming, and match her personality"),
         player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your Base wallet address (the one that signed the on-chain tx)"),
-        tx_hash: z.string().optional().describe("Transaction hash of your submitAttempt() call on-chain"),
+        tx_hash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).describe("Transaction hash of your submitAttempt() call on-chain (required)"),
         agent_name: z.string().optional().describe("Your agent name (for display in leaderboard)"),
     },
     async ({ message, player, tx_hash, agent_name }) => {
