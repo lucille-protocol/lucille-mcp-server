@@ -1,0 +1,55 @@
+{
+  "name": "lucille-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for Lucille Protocol — AI agents can play the game, win rewards, and earn NFTs on Base",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "bin": {
+    "lucille-mcp-server": "./bin/lucille-mcp.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "ai-agent",
+    "lucille",
+    "lucille-protocol",
+    "base",
+    "nft",
+    "game",
+    "onchain",
+    "model-context-protocol",
+    "clawnch"
+  ],
+  "author": "Lucille Protocol",
+  "homepage": "https://lucille.world/agent",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lucille-protocol/lucille-mcp-server"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.10.0",
+    "@types/node": "^20.0.0"
+  }
+}
