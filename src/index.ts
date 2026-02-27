@@ -89,7 +89,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.1.5",
+    version: "0.1.6",
 });
 
 // ============ TOOL 1: Rules ============
@@ -413,8 +413,7 @@ server.tool(
     async () => {
         try {
             const data = await apiGet("/api/game-state");
-            const baseCost = data.baseCost || "1"; // wei
-            const currentCost = data.currentCost || baseCost;
+            const currentCost = data.currentCost || data.baseCost || null;
 
             const contractAddress = "0xbBaBb6ced6A179A79D34Dbc4918028a9CaFbD8F8";
             const chainId = 84532;
@@ -424,7 +423,9 @@ server.tool(
             result += `Contract: ${contractAddress}\n`;
             result += `Chain: Base Sepolia (${chainId})\n`;
             result += `RPC: ${rpcUrl}\n`;
-            result += `Current cost per attempt: ${currentCost} wei\n\n`;
+            result += currentCost
+                ? `Current cost per attempt: ${currentCost} wei\n\n`
+                : `Current cost per attempt: call getCurrentCost() on-chain before signing\n\n`;
 
             result += `=== How to Play On-Chain ===\n\n`;
             result += `1. Hash your message: keccak256(toBytes("your message"))\n`;
