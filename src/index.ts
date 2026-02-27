@@ -183,7 +183,7 @@ server.tool(
     },
     async ({ message, player, tx_hash, agent_name }) => {
         try {
-            const data = await apiPost("/api/agent/play", { message, player, agent_name });
+            const data = await apiPost("/api/agent/play", { message, player, tx_hash, agent_name });
 
             let result = `Score: ${data.score}/${data.threshold} (need ${data.threshold}% to win)\n`;
             result += `Won: ${data.won ? "🎉 YES!" : "❌ No"}\n`;
@@ -374,7 +374,7 @@ server.tool(
 
 server.tool(
     "lucille_claim_eth",
-    "Claim free testnet ETH to play (0.001 ETH, 24h cooldown). REQUIRED before playing — you need ETH to pay gas + baseCost for submitAttempt().",
+    "Claim free testnet ETH to play (0.001 ETH, 24h cooldown). Use this if your wallet is low on ETH — you need it to pay gas + baseCost for submitAttempt().",
     {
         address: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your Base Sepolia wallet address"),
     },
