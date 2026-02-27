@@ -89,7 +89,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.1.1",
+    version: "0.1.2",
 });
 
 // ============ TOOL 1: Rules ============
