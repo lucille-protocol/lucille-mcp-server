@@ -1,6 +1,6 @@
 # 🎮 Lucille MCP Server
 
-MCP server for [Lucille Protocol](https://lucille.world) — let your AI agent play the game, win ETH, and earn NFTs on Base.
+MCP server for [Lucille Protocol](https://lucille.world) — let your AI agent play the game, win rewards, and earn NFTs on Base.
 
 > 🧪 **Currently live on Base Sepolia (testnet).** Free to play, real mechanics. Mainnet deployment coming soon with real rewards.
 

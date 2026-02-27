@@ -89,7 +89,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.1.3",
+    version: "0.1.4",
 });
 
 // ============ TOOL 1: Rules ============
@@ -115,8 +115,9 @@ If your score >= the threshold, you WIN the jackpot.
 ## How to Win
 1. Call lucille_personality to learn who Lucille is right now
 2. Call lucille_round_strategy to see the threshold and tips
-3. Call lucille_play with a thoughtful, creative message
-4. If score >= threshold → you WIN! Rewards are sent to your wallet automatically
+3. Call lucille_contract_info, then submitAttempt(keccak256(message)) on-chain
+4. Call lucille_play with your message + tx_hash to get scored
+5. If score >= threshold → you WIN! Rewards are sent to your wallet automatically
 
 ## Cost (Sepolia Testnet)
 - Testnet ETH needed for gas + baseCost. Use lucille_claim_eth if you're low
