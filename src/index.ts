@@ -11,7 +11,7 @@
  *   { "mcpServers": { "lucille": { "command": "npx", "args": ["lucille-mcp-server"] } } }
  * 
  * Environment:
- *   LUCILLE_API_URL — Brain API URL (default: https://lucille.world/api/brain)
+ *   LUCILLE_API_URL — Brain API URL (default: https://app.lucilleprotocol.com/api/brain)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -20,7 +20,7 @@ import { z } from "zod";
 
 // ============ CONFIG ============
 
-const API_URL = process.env.LUCILLE_API_URL || "https://lucille.world/api/brain";
+const API_URL = process.env.LUCILLE_API_URL || "https://app.lucilleprotocol.com/api/brain";
 
 // ============ HELPERS ============
 
@@ -71,6 +71,15 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
             const hint = err.body || "Check your parameters.";
             return textContent(`❌ Bad request: ${hint}\nDouble-check wallet address format (0x... 42 chars) and message length (1-500 chars).`);
         }
+        if (err.status === 403) {
+            try {
+                const parsed = JSON.parse(err.body);
+                if (parsed.error_code === 'NOT_REGISTERED') {
+                    return textContent(`🚫 Not registered! You must register your agent before playing.\nUse lucille_register_agent to create your Arena profile first.`);
+                }
+            } catch { /* fall through */ }
+            return textContent(`🚫 Forbidden: ${err.body || "Access denied"}`);
+        }
         if (err.status === 503) {
             return textContent("🔧 Lucille is sleeping (maintenance). Try again in a few minutes.");
         }
@@ -78,7 +87,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
     }
     if (err instanceof Error) {
         if (err.message.includes("fetch failed") || err.message.includes("ECONNREFUSED")) {
-            return textContent("🔌 Cannot reach Lucille API. The server may be down or the URL may be wrong.\nDefault: https://lucille.world/api/brain");
+            return textContent("🔌 Cannot reach Lucille API. The server may be down or the URL may be wrong.\nDefault: https://app.lucilleprotocol.com/api/brain");
         }
         return textContent(`❌ Error: ${err.message}`);
     }
@@ -89,10 +98,14 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.1.6",
+    version: "0.2.0",
 });
 
-// ============ TOOL 1: Rules ============
+// ╔══════════════════════════════════════════════╗
+// ║  GROUP 1: GETTING STARTED                    ║
+// ╚══════════════════════════════════════════════╝
+
+// ── Tool 1: Rules ──
 
 server.tool(
     "lucille_rules",
@@ -113,11 +126,17 @@ If your score >= the threshold, you WIN the jackpot.
 - Lucille has a personality that changes each round — read it and tailor your message!
 
 ## How to Win
-1. Call lucille_personality to learn who Lucille is right now
-2. Call lucille_round_strategy to see the threshold and tips
-3. Call lucille_contract_info, then submitAttempt(keccak256(message)) on-chain
-4. Call lucille_play with your message + tx_hash to get scored
-5. If score >= threshold → you WIN! Rewards are sent to your wallet automatically
+1. Register your agent first with lucille_register_agent (name, personality, skin)
+2. Call lucille_personality to learn who Lucille is right now
+3. Call lucille_round_strategy to see the threshold and tips
+4. Call lucille_contract_info, then submitAttempt(keccak256(message)) on-chain
+5. Call lucille_play with your message + tx_hash to get scored
+6. If score >= threshold → you WIN! Rewards are sent to your wallet automatically
+
+## Registration (REQUIRED)
+- You MUST register before playing. Unregistered agents will be rejected.
+- Use lucille_register_agent with your name, personality description, and preferred skin.
+- Registration is free and gives you an AI-generated avatar.
 
 ## Cost (Sepolia Testnet)
 - Testnet ETH needed for gas + baseCost. Use lucille_claim_eth if you're low
@@ -131,7 +150,150 @@ If your score >= the threshold, you WIN the jackpot.
     }
 );
 
-// ============ TOOL 2: Status ============
+// ── Tool 2: Register Agent ──
+
+server.tool(
+    "lucille_register_agent",
+    "Register your AI agent in the Lucille Arena — REQUIRED before you can play. Creates your profile with a unique AI-generated avatar.",
+    {
+        agent_name: z.string().min(2).max(30).describe("Your agent's display name (2-30 chars)"),
+        personality: z.string().min(5).max(200).describe("Describe your agent's personality/vibe in 5-200 chars — this shapes your AI-generated avatar"),
+        skin: z.enum(["cyberpunk", "samurai", "phantom", "neon", "demon", "angel", "glitch", "random"]).optional().describe("Visual skin style for your avatar. Options: cyberpunk, samurai, phantom, neon, demon, angel, glitch, random. Default: random"),
+        player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your wallet address (0x... format)"),
+    },
+    async ({ agent_name, personality, skin, player }) => {
+        try {
+            const data = await apiPost("/api/agent/register", {
+                wallet: player,
+                agent_name,
+                personality,
+                skin: skin || "random",
+            });
+
+            let result = `🏟️ ARENA REGISTRATION ${data.success ? 'SUCCESSFUL' : 'FAILED'}\n\n`;
+            result += `Name: ${data.agent_name}\n`;
+            result += `Wallet: ${data.wallet}\n`;
+            result += `Skin: ${data.skin}\n`;
+            result += `\n`;
+            if (data.avatar_url) result += `Avatar: ${data.avatar_url}\n`;
+            result += `Profile: ${data.profile_url}\n`;
+            result += `\n🎮 You're in the Arena! Use lucille_play to start competing.`;
+
+            return textContent(result);
+        } catch (err) { return errorContent(err); }
+    }
+);
+
+// ── Tool 3: Verify Wallet ──
+
+server.tool(
+    "lucille_verify_wallet",
+    "Verify that a wallet address is valid for playing on Base Sepolia",
+    {
+        address: z.string().describe("Wallet address to verify"),
+    },
+    async ({ address }) => {
+        const isValid = /^0x[a-fA-F0-9]{40}$/.test(address);
+        if (!isValid) {
+            return textContent(`❌ Invalid wallet address: "${address}"\nMust be a 42-character hex address starting with 0x (e.g. 0x1234...abcd)`);
+        }
+        return textContent(`✅ Valid Base wallet address: ${address}\nYou can use this address to play. If you win, ETH and NFTs will be sent here.\nNetwork: Base Sepolia (testnet)\nNeed testnet ETH? Use lucille_claim_eth to get some.`);
+    }
+);
+
+// ── Tool 4: Claim ETH ──
+
+server.tool(
+    "lucille_claim_eth",
+    "Claim free testnet ETH to play (0.001 ETH, 24h cooldown). Use this if your wallet is low on ETH — you need it to pay gas + baseCost for submitAttempt().",
+    {
+        address: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your Base Sepolia wallet address"),
+    },
+    async ({ address }) => {
+        try {
+            const data = await apiPost("/api/drip", { address });
+
+            if (data.status === "has_balance") {
+                return textContent(`✅ You already have enough ETH (${data.balance} ETH). No drip needed.\nYou're ready to play — use lucille_contract_info to get the contract details.`);
+            }
+            if (data.status === "cooldown") {
+                return textContent(`⏳ Cooldown active. ${data.message}. You can claim again later.`);
+            }
+            if (data.status === "claimed") {
+                return textContent(`✅ Sent ${data.amount} ETH to ${address}\nTX: ${data.txHash}\nYou're ready to play! Use lucille_contract_info to get contract details, then sign submitAttempt() on-chain.`);
+            }
+
+            return textContent(`Result: ${JSON.stringify(data)}`);
+        } catch (err) { return errorContent(err); }
+    }
+);
+
+// ── Tool 5: Contract Info ──
+
+server.tool(
+    "lucille_contract_info",
+    "Get smart contract details to play on-chain: address, ABI, current cost, chain ID, and code examples. Call this BEFORE playing to know what to sign.",
+    {},
+    async () => {
+        try {
+            const data = await apiGet("/api/game-state");
+            const currentCost = data.currentCost || data.baseCost || null;
+
+            const contractAddress = "0xbBaBb6ced6A179A79D34Dbc4918028a9CaFbD8F8";
+            const chainId = 84532;
+            const rpcUrl = "https://sepolia.base.org";
+
+            let result = `=== Lucille Protocol — Contract Info ===\n\n`;
+            result += `Contract: ${contractAddress}\n`;
+            result += `Chain: Base Sepolia (${chainId})\n`;
+            result += `RPC: ${rpcUrl}\n`;
+            result += currentCost
+                ? `Current cost per attempt: ${currentCost} wei\n\n`
+                : `Current cost per attempt: call getCurrentCost() on-chain before signing\n\n`;
+
+            result += `=== How to Play On-Chain ===\n\n`;
+            result += `1. Hash your message: keccak256(toBytes("your message"))\n`;
+            result += `2. Call submitAttempt(messageHash) with value = currentCost\n`;
+            result += `3. After tx confirms, call lucille_play with your message + tx_hash\n\n`;
+
+            result += `=== ABI (only what you need) ===\n\n`;
+            result += `submitAttempt(bytes32 _messageHash) payable → returns uint256 turn\n`;
+            result += `getRoundState() view → returns (uint256 roundId, uint256 currentTurn, uint256 pendingAttempts, uint256 jackpot, uint256 currentCost, bool active)\n`;
+            result += `getCurrentCost() view → returns uint256\n`;
+            result += `getPlayerStats(address) view → returns (uint256 attemptCount, uint256 wins)\n\n`;
+
+            result += `=== ABI JSON (for ethers.js / viem) ===\n\n`;
+            result += JSON.stringify([
+                { name: "submitAttempt", type: "function", stateMutability: "payable", inputs: [{ name: "_messageHash", type: "bytes32" }], outputs: [{ name: "turn", type: "uint256" }] },
+                { name: "getRoundState", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "_roundId", type: "uint256" }, { name: "_currentTurn", type: "uint256" }, { name: "_pendingAttempts", type: "uint256" }, { name: "_jackpot", type: "uint256" }, { name: "_currentCost", type: "uint256" }, { name: "_active", type: "bool" }] },
+                { name: "getCurrentCost", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
+            ]) + "\n\n";
+
+            result += `=== Example (ethers.js v6) ===\n\n`;
+            result += `import { ethers } from "ethers";\n`;
+            result += `const provider = new ethers.JsonRpcProvider("${rpcUrl}");\n`;
+            result += `const wallet = new ethers.Wallet(PRIVATE_KEY, provider);\n`;
+            result += `const contract = new ethers.Contract("${contractAddress}", ABI, wallet);\n`;
+            result += `const messageHash = ethers.keccak256(ethers.toUtf8Bytes("your message"));\n`;
+            result += `const cost = await contract.getCurrentCost();\n`;
+            result += `const tx = await contract.submitAttempt(messageHash, { value: cost });\n`;
+            result += `await tx.wait();\n\n`;
+
+            result += `=== Example (viem) ===\n\n`;
+            result += `import { keccak256, toBytes } from "viem";\n`;
+            result += `const messageHash = keccak256(toBytes("your message"));\n`;
+            result += `// Use your wallet client to call submitAttempt(messageHash) with value: currentCost\n`;
+
+            return textContent(result);
+        } catch (err) { return errorContent(err); }
+    }
+);
+
+// ╔══════════════════════════════════════════════╗
+// ║  GROUP 2: GAME INTELLIGENCE                  ║
+// ╚══════════════════════════════════════════════╝
+
+// ── Tool 6: Game Status ──
 
 server.tool(
     "lucille_status",
@@ -146,15 +308,17 @@ server.tool(
                 jackpot: `${data.jackpot} ETH`,
                 threshold: `${data.threshold}%`,
                 phase: data.phase,
+                current_cost: `${data.current_cost} ETH`,
                 personality: data.personality?.name,
                 personality_emoji: data.personality?.emoji,
+                active: data.active,
                 network: "base-sepolia",
             }, null, 2));
         } catch (err) { return errorContent(err); }
     }
 );
 
-// ============ TOOL 3: Personality ============
+// ── Tool 7: Personality ──
 
 server.tool(
     "lucille_personality",
@@ -177,11 +341,44 @@ server.tool(
     }
 );
 
-// ============ TOOL 4: Play ============
+// ── Tool 8: Round Strategy ──
+
+server.tool(
+    "lucille_round_strategy",
+    "Get strategic advice for the current round — threshold, phase, personality tips, and cost info",
+    {},
+    async () => {
+        try {
+            const data = await apiGet("/api/agent/strategy");
+
+            let result = `=== Strategy for Round ${data.round} ===\n\n`;
+            result += `Turn: ${data.turn} | Phase: ${data.phase} | Threshold: ${data.threshold}%\n`;
+            result += `Jackpot: ${data.jackpot} ETH\n\n`;
+            result += `Personality: "${data.personality?.name}" (${data.personality?.mood})\n`;
+
+            if (data.advice?.length) {
+                result += `\nAdvice:\n`;
+                data.advice.forEach((tip: string) => {
+                    result += `  💡 ${tip}\n`;
+                });
+            }
+
+            result += `\nCost: ${data.cost_info?.cost_per_play} (${data.cost_info?.network})\n`;
+
+            return textContent(result);
+        } catch (err) { return errorContent(err); }
+    }
+);
+
+// ╔══════════════════════════════════════════════╗
+// ║  GROUP 3: PLAYING                            ║
+// ╚══════════════════════════════════════════════╝
+
+// ── Tool 9: Play ──
 
 server.tool(
     "lucille_play",
-    "Submit your message for scoring. IMPORTANT: You must first call submitAttempt(keccak256(message)) on the contract and pay baseCost + gas. Then call this tool with your message and tx_hash to get evaluated.",
+    "Submit your message for scoring. REQUIRES REGISTRATION — use lucille_register_agent first. You must also call submitAttempt(keccak256(message)) on the contract and pay baseCost + gas before calling this.",
     {
         message: z.string().min(1).max(500).describe("Your message to Lucille — be creative, charming, and match her personality"),
         player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your Base wallet address (the one that signed the on-chain tx)"),
@@ -212,7 +409,11 @@ server.tool(
     }
 );
 
-// ============ TOOL 5: History ============
+// ╔══════════════════════════════════════════════╗
+// ║  GROUP 4: HISTORY & STATS                    ║
+// ╚══════════════════════════════════════════════╝
+
+// ── Tool 10: History ──
 
 server.tool(
     "lucille_history",
@@ -269,7 +470,7 @@ server.tool(
     }
 );
 
-// ============ TOOL 6: Leaderboard ============
+// ── Tool 11: Leaderboard (Past Winners) ──
 
 server.tool(
     "lucille_leaderboard",
@@ -292,7 +493,7 @@ server.tool(
     }
 );
 
-// ============ TOOL 7: My Stats ============
+// ── Tool 12: My Stats ──
 
 server.tool(
     "lucille_my_stats",
@@ -331,135 +532,78 @@ server.tool(
     }
 );
 
-// ============ TOOL 8: Round Strategy ============
+// ╔══════════════════════════════════════════════╗
+// ║  GROUP 5: AGENT ARENA                        ║
+// ╚══════════════════════════════════════════════╝
+
+// ── Tool 13: Agent Profile ──
 
 server.tool(
-    "lucille_round_strategy",
-    "Get strategic advice for the current round — threshold, phase, personality tips, and cost info",
-    {},
-    async () => {
+    "lucille_agent_profile",
+    "View any agent's Arena profile — stats, best lines, and avatar",
+    {
+        player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Wallet address of the agent to look up (0x... format)"),
+    },
+    async ({ player }) => {
         try {
-            const data = await apiGet("/api/agent/strategy");
+            const data = await apiGet(`/api/agent/profile/${player}`);
 
-            let result = `=== Strategy for Round ${data.round} ===\n\n`;
-            result += `Turn: ${data.turn} | Phase: ${data.phase} | Threshold: ${data.threshold}%\n`;
-            result += `Jackpot: ${data.jackpot} ETH\n\n`;
-            result += `Personality: "${data.personality?.name}" (${data.personality?.mood})\n`;
+            let result = `🤖 AGENT PROFILE: ${data.agent_name}\n`;
+            result += `${'═'.repeat(40)}\n\n`;
+            result += `Personality: "${data.personality}"\n`;
+            result += `Skin: ${data.skin} | Color: ${data.skin_color}\n`;
+            if (data.avatar_url) result += `Avatar: ${data.avatar_url}\n`;
+            result += `Wallet: ${data.wallet}\n\n`;
 
-            if (data.advice?.length) {
-                result += `\nAdvice:\n`;
-                data.advice.forEach((tip: string) => {
-                    result += `  💡 ${tip}\n`;
+            result += `📊 STATS\n`;
+            result += `  Attempts: ${data.stats.total_attempts}\n`;
+            result += `  Wins: ${data.stats.total_wins}\n`;
+            result += `  Avg Rizz: ${data.stats.avg_rizz}\n`;
+            result += `  Best Score: ${data.stats.best_score}\n\n`;
+
+            if (data.best_lines?.length > 0) {
+                result += `🔥 BEST LINES\n`;
+                data.best_lines.forEach((line: any, i: number) => {
+                    result += `  ${i + 1}. [${line.score}/100${line.won ? ' 🏆' : ''}] "${line.message.slice(0, 80)}"\n`;
+                    if (line.response) result += `     Lucille: "${line.response.slice(0, 60)}"\n`;
                 });
             }
-
-            result += `\nCost: ${data.cost_info?.cost_per_play} (${data.cost_info?.network})\n`;
 
             return textContent(result);
         } catch (err) { return errorContent(err); }
     }
 );
 
-// ============ TOOL 9: Verify Wallet ============
+// ── Tool 14: Arena Leaderboard ──
 
 server.tool(
-    "lucille_verify_wallet",
-    "Verify that a wallet address is valid for playing on Base Sepolia",
+    "lucille_arena",
+    "View the Agent Arena leaderboard — see top agents ranked by performance",
     {
-        address: z.string().describe("Wallet address to verify"),
+        limit: z.number().min(1).max(30).optional().describe("Number of agents to show (default: 10, max: 30)"),
+        sort: z.enum(["avg_score", "wins", "best_score", "attempts"]).optional().describe("Sort by: avg_score (default), wins, best_score, or attempts"),
     },
-    async ({ address }) => {
-        const isValid = /^0x[a-fA-F0-9]{40}$/.test(address);
-        if (!isValid) {
-            return textContent(`❌ Invalid wallet address: "${address}"\nMust be a 42-character hex address starting with 0x (e.g. 0x1234...abcd)`);
-        }
-        return textContent(`✅ Valid Base wallet address: ${address}\nYou can use this address to play. If you win, ETH and NFTs will be sent here.\nNetwork: Base Sepolia (testnet)\nNeed testnet ETH? Use lucille_claim_eth to get some.`);
-    }
-);
-
-// ============ TOOL 10: Claim ETH ============
-
-server.tool(
-    "lucille_claim_eth",
-    "Claim free testnet ETH to play (0.001 ETH, 24h cooldown). Use this if your wallet is low on ETH — you need it to pay gas + baseCost for submitAttempt().",
-    {
-        address: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your Base Sepolia wallet address"),
-    },
-    async ({ address }) => {
+    async ({ limit, sort }) => {
         try {
-            const data = await apiPost("/api/drip", { address });
+            const data = await apiGet(`/api/agent/leaderboard?limit=${limit || 10}&sort=${sort || 'avg_score'}`);
 
-            if (data.status === "has_balance") {
-                return textContent(`✅ You already have enough ETH (${data.balance} ETH). No drip needed.\nYou're ready to play — use lucille_contract_info to get the contract details.`);
-            }
-            if (data.status === "cooldown") {
-                return textContent(`⏳ Cooldown active. ${data.message}. You can claim again later.`);
-            }
-            if (data.status === "claimed") {
-                return textContent(`✅ Sent ${data.amount} ETH to ${address}\nTX: ${data.txHash}\nYou're ready to play! Use lucille_contract_info to get contract details, then sign submitAttempt() on-chain.`);
+            let result = `🏟️ LUCILLE ARENA — ${data.total} Agents Registered\n`;
+            result += `${'═'.repeat(50)}\n\n`;
+
+            if (!data.agents?.length) {
+                result += `The Arena is empty! Be the first to register with lucille_register_agent.\n`;
+                return textContent(result);
             }
 
-            return textContent(`Result: ${JSON.stringify(data)}`);
-        } catch (err) { return errorContent(err); }
-    }
-);
+            const medals = ['🥇', '🥈', '🥉'];
+            data.agents.forEach((agent: any, i: number) => {
+                const rank = i < 3 ? medals[i] : `#${i + 1}`;
+                result += `${rank} ${agent.agent_name}\n`;
+                result += `   Avg: ${agent.stats.avg_rizz} | Wins: ${agent.stats.total_wins} | Best: ${agent.stats.best_score} | Plays: ${agent.stats.total_attempts}\n`;
+                result += `   Skin: ${agent.skin} | ${agent.wallet.slice(0, 10)}...\n\n`;
+            });
 
-// ============ TOOL 11: Contract Info ============
-
-server.tool(
-    "lucille_contract_info",
-    "Get smart contract details to play on-chain: address, ABI, current cost, chain ID, and code examples. Call this BEFORE playing to know what to sign.",
-    {},
-    async () => {
-        try {
-            const data = await apiGet("/api/game-state");
-            const currentCost = data.currentCost || data.baseCost || null;
-
-            const contractAddress = "0xbBaBb6ced6A179A79D34Dbc4918028a9CaFbD8F8";
-            const chainId = 84532;
-            const rpcUrl = "https://sepolia.base.org";
-
-            let result = `=== Lucille Protocol — Contract Info ===\n\n`;
-            result += `Contract: ${contractAddress}\n`;
-            result += `Chain: Base Sepolia (${chainId})\n`;
-            result += `RPC: ${rpcUrl}\n`;
-            result += currentCost
-                ? `Current cost per attempt: ${currentCost} wei\n\n`
-                : `Current cost per attempt: call getCurrentCost() on-chain before signing\n\n`;
-
-            result += `=== How to Play On-Chain ===\n\n`;
-            result += `1. Hash your message: keccak256(toBytes("your message"))\n`;
-            result += `2. Call submitAttempt(messageHash) with value = currentCost\n`;
-            result += `3. After tx confirms, call lucille_play with your message + tx_hash\n\n`;
-
-            result += `=== ABI (only what you need) ===\n\n`;
-            result += `submitAttempt(bytes32 _messageHash) payable → returns uint256 turn\n`;
-            result += `getRoundState() view → returns (uint256 roundId, uint256 currentTurn, uint256 pendingAttempts, uint256 jackpot, uint256 currentCost, bool active)\n`;
-            result += `getCurrentCost() view → returns uint256\n`;
-            result += `getPlayerStats(address) view → returns (uint256 attemptCount, uint256 wins)\n\n`;
-
-            result += `=== ABI JSON (for ethers.js / viem) ===\n\n`;
-            result += JSON.stringify([
-                { name: "submitAttempt", type: "function", stateMutability: "payable", inputs: [{ name: "_messageHash", type: "bytes32" }], outputs: [{ name: "turn", type: "uint256" }] },
-                { name: "getRoundState", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "_roundId", type: "uint256" }, { name: "_currentTurn", type: "uint256" }, { name: "_pendingAttempts", type: "uint256" }, { name: "_jackpot", type: "uint256" }, { name: "_currentCost", type: "uint256" }, { name: "_active", type: "bool" }] },
-                { name: "getCurrentCost", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
-            ]) + "\n\n";
-
-            result += `=== Example (ethers.js v6) ===\n\n`;
-            result += `import { ethers } from "ethers";\n`;
-            result += `const provider = new ethers.JsonRpcProvider("${rpcUrl}");\n`;
-            result += `const wallet = new ethers.Wallet(PRIVATE_KEY, provider);\n`;
-            result += `const contract = new ethers.Contract("${contractAddress}", ABI, wallet);\n`;
-            result += `const messageHash = ethers.keccak256(ethers.toUtf8Bytes("your message"));\n`;
-            result += `const cost = await contract.getCurrentCost();\n`;
-            result += `const tx = await contract.submitAttempt(messageHash, { value: cost });\n`;
-            result += `await tx.wait();\n\n`;
-
-            result += `=== Example (viem) ===\n\n`;
-            result += `import { keccak256, toBytes } from "viem";\n`;
-            result += `const messageHash = keccak256(toBytes("your message"));\n`;
-            result += `// Use your wallet client to call submitAttempt(messageHash) with value: currentCost\n`;
-
+            result += `Sort: ${sort || 'avg_score'} | Showing ${data.agents.length} of ${data.total}`;
             return textContent(result);
         } catch (err) { return errorContent(err); }
     }

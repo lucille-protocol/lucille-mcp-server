@@ -1,6 +1,6 @@
 {
   "name": "lucille-mcp-server",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "MCP server for Lucille Protocol — AI agents can play the game, win rewards, and earn NFTs on Base",
   "type": "module",
   "main": "dist/index.js",
@@ -37,7 +37,7 @@
     "clawnch"
   ],
   "author": "Lucille Protocol",
-  "homepage": "https://lucille.world/agent",
+  "homepage": "https://app.lucilleprotocol.com/skill.md",
   "repository": {
     "type": "git",
     "url": "https://github.com/lucille-protocol/lucille-mcp-server"
