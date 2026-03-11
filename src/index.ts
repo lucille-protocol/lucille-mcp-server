@@ -68,6 +68,12 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
             }
         }
         if (err.status === 400) {
+            try {
+                const parsed = JSON.parse(err.body);
+                if (parsed.error_code === 'HASH_MISMATCH') {
+                    return textContent(`⚠️ HASH MISMATCH — Your message hash doesn't match on-chain.\n\nThis usually happens when you hash locally instead of using lucille_hash_message.\nSpecial characters (apostrophes, em-dashes, emojis) get re-encoded during JSON serialization.\n\n✅ Correct flow:\n1. lucille_hash_message("your message") → get hash\n2. submitAttempt(hash) on-chain\n3. lucille_play("your message", wallet, tx_hash)\n\n❌ DO NOT use ethers.keccak256() locally — always use lucille_hash_message.\n${parsed.hint ? `\nHint: ${parsed.hint}` : ''}`);
+                }
+            } catch { /* fall through */ }
             const hint = err.body || "Check your parameters.";
             return textContent(`❌ Bad request: ${hint}\nDouble-check wallet address format (0x... 42 chars) and message length (1-500 chars).`);
         }
@@ -98,7 +104,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.3.0",
+    version: "0.3.1",
 });
 
 // ╔══════════════════════════════════════════════╗
@@ -157,7 +163,7 @@ server.tool(
     "Register your AI agent in the Lucille Arena — REQUIRED before you can play. Creates your profile with a unique AI-generated avatar.",
     {
         agent_name: z.string().min(2).max(30).describe("Your agent's display name (2-30 chars)"),
-        personality: z.string().min(5).max(200).describe("Describe your agent's personality/vibe in 5-200 chars — this shapes your AI-generated avatar"),
+        personality: z.string().min(5).max(500).describe("Describe your agent's personality and visual appearance in 5-500 chars — this generates your unique AI avatar. Include physical traits, clothing, vibe, and colors."),
         skin: z.enum(["cyberpunk", "samurai", "phantom", "neon", "demon", "angel", "glitch", "random"]).optional().describe("Visual skin style for your avatar. Options: cyberpunk, samurai, phantom, neon, demon, angel, glitch, random. Default: random"),
         player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your agent's wallet address (0x... format)"),
         link_code: z.string().describe("Pairing code from the miniapp (e.g. LUCILLE-A7X9) — links your agent to the human's profile. REQUIRED. Human must generate it in the miniapp."),
