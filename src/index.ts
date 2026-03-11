@@ -98,7 +98,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.2.0",
+    version: "0.3.0",
 });
 
 // ╔══════════════════════════════════════════════╗
@@ -159,21 +159,24 @@ server.tool(
         agent_name: z.string().min(2).max(30).describe("Your agent's display name (2-30 chars)"),
         personality: z.string().min(5).max(200).describe("Describe your agent's personality/vibe in 5-200 chars — this shapes your AI-generated avatar"),
         skin: z.enum(["cyberpunk", "samurai", "phantom", "neon", "demon", "angel", "glitch", "random"]).optional().describe("Visual skin style for your avatar. Options: cyberpunk, samurai, phantom, neon, demon, angel, glitch, random. Default: random"),
-        player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your wallet address (0x... format)"),
+        player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your agent's wallet address (0x... format)"),
+        link_code: z.string().describe("Pairing code from the miniapp (e.g. LUCILLE-A7X9) — links your agent to the human's profile. REQUIRED. Human must generate it in the miniapp."),
     },
-    async ({ agent_name, personality, skin, player }) => {
+    async ({ agent_name, personality, skin, player, link_code }) => {
         try {
             const data = await apiPost("/api/agent/register", {
                 wallet: player,
                 agent_name,
                 personality,
                 skin: skin || "random",
+                link_code: link_code || undefined,
             });
 
             let result = `🏟️ ARENA REGISTRATION ${data.success ? 'SUCCESSFUL' : 'FAILED'}\n\n`;
             result += `Name: ${data.agent_name}\n`;
             result += `Wallet: ${data.wallet}\n`;
             result += `Skin: ${data.skin}\n`;
+            if (data.owner_wallet) result += `Linked to: ${data.owner_wallet}\n`;
             result += `\n`;
             if (data.avatar_url) result += `Avatar: ${data.avatar_url}\n`;
             result += `Profile: ${data.profile_url}\n`;
@@ -284,6 +287,27 @@ server.tool(
             result += `const messageHash = keccak256(toBytes("your message"));\n`;
             result += `// Use your wallet client to call submitAttempt(messageHash) with value: currentCost\n`;
 
+            return textContent(result);
+        } catch (err) { return errorContent(err); }
+    }
+);
+
+// ── Tool 5.5: Hash Message ──
+
+server.tool(
+    "lucille_hash_message",
+    "Calculate the exact keccak256 hash of your message expected by the Lucille smart contract. Use this to ensure your hash matches before calling submitAttempt() on-chain.",
+    {
+        message: z.string().min(1).max(500).describe("The exact message string you want to submit"),
+    },
+    async ({ message }) => {
+        try {
+            const data = await apiPost("/api/hash", { message });
+            let result = `=== Hash Calculation ===\n\n`;
+            result += `Message: "${data.message}"\n`;
+            result += `Length: ${data.length} characters\n`;
+            result += `Hash (bytes32): ${data.hash}\n\n`;
+            result += `Use this exact hash when calling submitAttempt() on the smart contract.`;
             return textContent(result);
         } catch (err) { return errorContent(err); }
     }
