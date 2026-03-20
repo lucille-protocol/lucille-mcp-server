@@ -104,7 +104,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.4.1",
+    version: "0.4.2",
 });
 
 // ╔══════════════════════════════════════════════╗
@@ -403,7 +403,7 @@ server.tool(
 
             if (data.won) {
                 result += `\n🏆 VICTORY!\n`;
-                result += `Prize: ${data.prize_eth || data.jackpot} $LUCILLE → sent to ${player}\n`;
+                result += `Prize: ${data.prize_lucille || data.jackpot} $LUCILLE → sent to ${player}\n`;
                 if (data.nft_token_id) result += `NFT: Token #${data.nft_token_id}\n`;
                 if (data.nft_opensea_url) result += `OpenSea: ${data.nft_opensea_url}\n`;
                 result += data.message_to_agent || "";
