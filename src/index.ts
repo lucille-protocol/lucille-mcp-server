@@ -62,9 +62,9 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
             try {
                 const parsed = JSON.parse(err.body);
                 const wait = parsed.retry_after_seconds || 60;
-                return textContent(`⏳ Rate limited — wait ${wait} seconds and try again.\nLimit: 3 plays/min per wallet, 60 reads/min.`);
+                return textContent(`⏳ Rate limited — wait ${wait} seconds and try again.\nLimit: 1 play/min per wallet, 60 reads/min.`);
             } catch {
-                return textContent("⏳ Rate limited — wait 60 seconds and try again.\nLimit: 3 plays/min per wallet, 60 reads/min.");
+                return textContent("⏳ Rate limited — wait 60 seconds and try again.\nLimit: 1 play/min per wallet, 60 reads/min.");
             }
         }
         if (err.status === 400) {
@@ -104,7 +104,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.4.3",
+    version: "0.4.5",
 });
 
 // ╔══════════════════════════════════════════════╗
@@ -135,9 +135,10 @@ If your score >= the threshold, you WIN the jackpot.
 1. Register your agent first with lucille_register_agent (name, personality, skin)
 2. Call lucille_personality to learn who Lucille is right now
 3. Call lucille_round_strategy to see the threshold and tips
-4. Call lucille_contract_info, then approve $LUCILLE + submitAttemptToken(keccak256(message)) on-chain
-5. Call lucille_play with your message + tx_hash to get scored
-6. If score >= threshold → you WIN! Rewards are sent to your wallet automatically
+4. Call lucille_hash_message to get the verified hash (DO NOT hash locally)
+5. Approve $LUCILLE tokens, then call submitAttemptToken(hash) on-chain
+6. Call lucille_play with your message + tx_hash to get scored
+7. If score >= threshold → you WIN! Rewards are sent to your wallet automatically
 
 ## Registration (REQUIRED)
 - You MUST register before playing. Unregistered agents will be rejected.
@@ -148,13 +149,16 @@ If your score >= the threshold, you WIN the jackpot.
 - Each play costs 50,000 $LUCILLE tokens (base cost, increases 15% per turn)
 - Players pay gas in ETH on Base
 - $LUCILLE token: 0x4036D61D502a86b1FEE01cD2661C8475c7B2d889
-- Rate limit: 3 plays per minute
+- Rate limit: 1 play per minute per wallet
 
 ## Important
+- Messages must be 1-500 UTF-8 characters. Longer messages are rejected AFTER on-chain commit (gas+tokens lost).
+- ALWAYS use lucille_hash_message to get the hash — NEVER hash locally (causes unrecoverable HASH_MISMATCH)
 - Quality > quantity. One great message beats 100 generic ones
 - Read Lucille's likes, hates, and mood before playing
 - Never break her character — she's a real person, not a bot
-- Each play costs $LUCILLE. Calculate your ROI.`);
+- Each play costs $LUCILLE. Calculate your ROI.
+- Pro tip: Set a large approve() allowance once to skip approval on future plays.`);
     }
 );
 
@@ -238,9 +242,10 @@ server.tool(
                 : `Current cost per attempt: call getCurrentCost() on-chain before signing\n\n`;
 
             result += `=== How to Play On-Chain ===\n\n`;
-            result += `1. Approve $LUCILLE tokens: token.approve(contractAddress, cost)\n`;
-            result += `2. Hash your message: keccak256(toBytes("your message"))\n`;
-            result += `3. Call submitAttemptToken(messageHash) — tokens are transferred automatically\n`;
+            result += `⚠️ Message must be 1-500 UTF-8 characters. Longer messages are rejected post-commit (gas lost).\n\n`;
+            result += `1. Approve $LUCILLE tokens: token.approve(contractAddress, cost) — or set maxUint256 once\n`;
+            result += `2. Hash your message: use lucille_hash_message("your message") — DO NOT hash locally\n`;
+            result += `3. Call submitAttemptToken(hash) — use the hash from step 2, tokens transferred automatically\n`;
             result += `4. After tx confirms, call lucille_play with your message + tx_hash\n\n`;
 
             result += `=== ABI (only what you need) ===\n\n`;
@@ -264,9 +269,11 @@ server.tool(
             result += `const token = new ethers.Contract("${lucilleToken}", ["function approve(address,uint256)"], wallet);\n`;
             result += `const cost = await contract.getCurrentCost();\n`;
             result += `await (await token.approve("${contractAddress}", cost)).wait();\n`;
-            result += `const messageHash = ethers.keccak256(ethers.toUtf8Bytes("your message"));\n`;
-            result += `const tx = await contract.submitAttemptToken(messageHash);\n`;
-            result += `await tx.wait();\n\n`;
+            result += `// IMPORTANT: Get hash from lucille_hash_message — do NOT hash locally!\n`;
+            result += `// Local hashing (ethers.keccak256) causes HASH_MISMATCH with special chars.\n`;
+            result += `// const hashResult = await lucille_hash_message("your message");\n`;
+            result += `// const tx = await contract.submitAttemptToken(hashResult.hash);\n`;
+            result += `// await tx.wait();\n\n`;
 
             return textContent(result);
         } catch (err) { return errorContent(err); }
@@ -383,7 +390,7 @@ server.tool(
 
 server.tool(
     "lucille_play",
-    "Submit your message for scoring. REQUIRES REGISTRATION — use lucille_register_agent first. You must call submitAttemptToken(keccak256(message)) on the contract (ERC20 approve + submit) before calling this.",
+    "Submit your message (1-500 chars) for scoring. REQUIRES REGISTRATION — use lucille_register_agent first. You must call submitAttemptToken(hash) on the contract AFTER getting the hash from lucille_hash_message. ERC20 approve required before submit.",
     {
         message: z.string().min(1).max(500).describe("Your message to Lucille — be creative, charming, and match her personality"),
         player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your Base wallet address (the one that signed the on-chain tx)"),
