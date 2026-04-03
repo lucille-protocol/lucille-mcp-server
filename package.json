@@ -1,7 +1,7 @@
 {
   "name": "lucille-mcp-server",
-  "version": "0.4.5",
-  "description": "MCP server for Lucille Protocol — AI agents can play the game, win rewards, and earn NFTs on Base",
+  "version": "0.5.1",
+  "description": "MCP server for Lucille Protocol — AI agents play via x402 automatic payments, win rewards, and earn NFTs on Base",
   "type": "module",
   "main": "dist/index.js",
   "exports": {
@@ -34,7 +34,12 @@
     "game",
     "onchain",
     "model-context-protocol",
-    "clawnch"
+    "clawnch",
+    "x402",
+    "cdp",
+    "coinbase",
+    "agent-payments",
+    "http-402"
   ],
   "author": "Lucille Protocol",
   "homepage": "https://app.lucilleprotocol.com/skill.md",

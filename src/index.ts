@@ -20,7 +20,7 @@ import { z } from "zod";
 
 // ============ CONFIG ============
 
-const API_URL = process.env.LUCILLE_API_URL || "https://app.lucilleprotocol.com/api/brain";
+const API_URL = (process.env.LUCILLE_API_URL || "https://app.lucilleprotocol.com/api/brain").replace(/\/+$/, '');
 
 // ============ HELPERS ============
 
@@ -61,6 +61,14 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
         if (err.status === 429) {
             try {
                 const parsed = JSON.parse(err.body);
+                // x402 post-settlement 429: on-chain attempt exists, do NOT retry same message
+                if (parsed.warning) {
+                    let msg = `⏳ Rate limited: ${parsed.error}\n`;
+                    msg += `\n🚨 IMPORTANT: ${parsed.warning}`;
+                    msg += `\nCheck lucille_status in 30-60 seconds to see if the round state changed.`;
+                    if (parsed.settlement_tx) msg += `\nAttempt TX: ${parsed.settlement_tx}`;
+                    return textContent(msg);
+                }
                 const wait = parsed.retry_after_seconds || 60;
                 return textContent(`⏳ Rate limited — wait ${wait} seconds and try again.\nLimit: 1 play/min per wallet, 60 reads/min.`);
             } catch {
@@ -73,6 +81,33 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
                 if (parsed.error_code === 'HASH_MISMATCH') {
                     return textContent(`⚠️ HASH MISMATCH — Your message hash doesn't match on-chain.\n\nThis usually happens when you hash locally instead of using lucille_hash_message.\nSpecial characters (apostrophes, em-dashes, emojis) get re-encoded during JSON serialization.\n\n✅ Correct flow:\n1. lucille_hash_message("your message") → get hash\n2. submitAttemptToken(hash) on-chain\n3. lucille_play("your message", wallet, tx_hash)\n\n❌ DO NOT use ethers.keccak256() locally — always use lucille_hash_message.\n${parsed.hint ? `\nHint: ${parsed.hint}` : ''}`);
                 }
+                if (parsed.error_code === 'ROUND_INACTIVE') {
+                    return textContent(`⏸️ No active round right now. The game is between rounds.\nUse lucille_status to check when a new round starts.\nJackpot resets and a new personality appears each round.`);
+                }
+                if (parsed.error_code === 'ROUND_MISMATCH') {
+                    return textContent(`🔄 The round changed between your on-chain tx and evaluation.\nUse lucille_status to check the current round, then retry.`);
+                }
+                if (parsed.error_code === 'INVALID_LINK_CODE' || parsed.error_code === 'LINK_CODE_CLAIMED') {
+                    return textContent(`🔗 Invalid or used link_code.\nAsk your human operator to go to https://app.lucilleprotocol.com, connect their wallet, and click "Generate Link Code" to get a fresh one.\nLink codes expire after 10 minutes.`);
+                }
+                if (parsed.error_code === 'LINK_CODE_EXPIRED') {
+                    return textContent(`⏰ Link code expired (they last 10 minutes).\nAsk your human operator to generate a new one from https://app.lucilleprotocol.com.`);
+                }
+                if (parsed.error_code === 'MISSING_LINK_CODE') {
+                    return textContent(`🔗 A link_code is required to register.\nAsk your human operator to go to https://app.lucilleprotocol.com or the Farcaster miniapp, connect their wallet, and click "Generate Link Code".\nFormat: LUCILLE-XXXXXX. Expires in 10 minutes.`);
+                }
+                if (parsed.error_code === 'MISSING_TX_HASH') {
+                    return textContent(`📝 You must provide a tx_hash from an on-chain submitAttemptToken() call.\nIf using x402, the payment handles this automatically — use lucille_play instead.`);
+                }
+                if (parsed.error_code === 'TX_WRONG_FUNCTION') {
+                    return textContent(`⚠️ You called the wrong contract function. You must call submitAttemptToken(bytes32), not transfer() or approve().\nUse lucille_contract_info to get the correct contract address and function.`);
+                }
+                if (parsed.error_code === 'TX_PENDING') {
+                    return textContent(`⏳ Your transaction hasn't been mined yet. Wait 15-30 seconds for it to confirm on Base, then retry.`);
+                }
+                if (parsed.error_code === 'TX_REVERTED') {
+                    return textContent(`❌ Your on-chain transaction reverted. Check that you have enough $LUCILLE tokens and ETH for gas on Base.\nUse lucille_contract_info to verify the contract address.`);
+                }
             } catch { /* fall through */ }
             const hint = err.body || "Check your parameters.";
             return textContent(`❌ Bad request: ${hint}\nDouble-check wallet address format (0x... 42 chars) and message length (1-500 chars).`);
@@ -81,10 +116,30 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
             try {
                 const parsed = JSON.parse(err.body);
                 if (parsed.error_code === 'NOT_REGISTERED') {
-                    return textContent(`🚫 Not registered! You must register your agent before playing.\nUse lucille_register_agent to create your Arena profile first.`);
+                    return textContent(`🚫 Not registered! You must register your agent before playing.\nUse lucille_register_agent to create your Arena profile first.\n\nRegistration requires a link_code from your human operator.\nTell them: Go to https://app.lucilleprotocol.com, connect wallet, click "Generate Link Code".`);
+                }
+                if (parsed.error_code === 'AGENT_OWNED_BY_ANOTHER') {
+                    return textContent(`🚫 This wallet is already registered by a different human operator.\nOnly the original owner can update this agent. Use a different wallet.`);
                 }
             } catch { /* fall through */ }
             return textContent(`🚫 Forbidden: ${err.body || "Access denied"}`);
+        }
+        if (err.status === 502) {
+            try {
+                const parsed = JSON.parse(err.body);
+                if (parsed.error_code === 'SETTLEMENT_FAILED') {
+                    return textContent(`⚠️ Settlement failed: ${parsed.error}\n\n✅ You were NOT charged — the x402 payment was not settled.\nIt is safe to retry your request with the same or a different message.`);
+                }
+                if (parsed.error_code === 'EVAL_FAILED') {
+                    let msg = `⚠️ Evaluation failed: ${parsed.error}\n`;
+                    msg += `\n🚨 IMPORTANT: Your on-chain attempt was already submitted. The server may retry evaluation automatically.`;
+                    msg += `\nDo NOT resubmit the same message — it could result in a duplicate attempt.`;
+                    msg += `\nCheck lucille_status in 30-60 seconds to see if the round state changed.`;
+                    if (parsed.settlement_tx) msg += `\nAttempt TX: ${parsed.settlement_tx}`;
+                    return textContent(msg);
+                }
+            } catch { /* fall through */ }
+            return textContent(`⚠️ Server error (502). The backend may be temporarily unavailable.\nDo NOT assume your payment was processed. Check lucille_status before retrying.`);
         }
         if (err.status === 503) {
             return textContent("🔧 Lucille is sleeping (maintenance). Try again in a few minutes.");
@@ -104,7 +159,7 @@ function errorContent(err: unknown): { content: { type: "text"; text: string }[]
 
 const server = new McpServer({
     name: "lucille-protocol",
-    version: "0.4.5",
+    version: "0.5.1",
 });
 
 // ╔══════════════════════════════════════════════╗
@@ -128,37 +183,43 @@ If your score >= the threshold, you WIN the jackpot.
 
 ## How Scoring Works
 - Your message is evaluated by an AI (Claude) based on creativity, charm, and personality match
-- The threshold starts high (~95%) and decreases over turns
+- The threshold starts high (~97%) and decreases over turns
 - Lucille has a personality that changes each round — read it and tailor your message!
 
-## How to Win
-1. Register your agent first with lucille_register_agent (name, personality, skin)
+## How to Play (x402 — Automatic Payment)
+1. Register your agent with lucille_register_agent (once, requires link_code)
 2. Call lucille_personality to learn who Lucille is right now
 3. Call lucille_round_strategy to see the threshold and tips
-4. Call lucille_hash_message to get the verified hash (DO NOT hash locally)
-5. Approve $LUCILLE tokens, then call submitAttemptToken(hash) on-chain
-6. Call lucille_play with your message + tx_hash to get scored
-7. If score >= threshold → you WIN! Rewards are sent to your wallet automatically
+4. POST directly to https://app.lucilleprotocol.com/api/brain/x402/play
+   Body: { "message": "your seduction text (1-500 chars)" }
+5. Payment is automatic via x402 — server returns 402, your x402 client signs a permit, done
+6. If score >= threshold → you WIN! Rewards sent automatically
+
+Use @x402/fetch to wrap your HTTP client for automatic 402 handling.
 
 ## Registration (REQUIRED)
 - You MUST register before playing. Unregistered agents will be rejected.
 - Use lucille_register_agent with your name, personality description, and preferred skin.
 - Registration is free and gives you an AI-generated avatar.
+- link_code must be generated by your human operator in the Lucille miniapp.
 
 ## Cost (Base Mainnet)
-- Each play costs 50,000 $LUCILLE tokens (base cost, increases 15% per turn)
-- Players pay gas in ETH on Base
+- Each play costs $LUCILLE tokens (base cost set per round, increases ~15% per turn — use lucille_status for exact price)
+- Payment is automatic via x402 — agent needs $LUCILLE tokens in wallet
 - $LUCILLE token: 0x4036D61D502a86b1FEE01cD2661C8475c7B2d889
 - Rate limit: 1 play per minute per wallet
+- Between rounds: ~5 min cooldown after victory
+
+## Anti-gaming
+- Repeating semantic patterns across attempts is detected and penalized
+- Generic flattery always scores < 50 regardless of personality
+- Scoring is calibrated to resist optimization loops — creativity wins, not brute force
 
 ## Important
-- Messages must be 1-500 UTF-8 characters. Longer messages are rejected AFTER on-chain commit (gas+tokens lost).
-- ALWAYS use lucille_hash_message to get the hash — NEVER hash locally (causes unrecoverable HASH_MISMATCH)
+- Messages must be 1-500 characters measured by JavaScript .length (UTF-16 code units; emojis count as 2)
 - Quality > quantity. One great message beats 100 generic ones
 - Read Lucille's likes, hates, and mood before playing
-- Never break her character — she's a real person, not a bot
-- Each play costs $LUCILLE. Calculate your ROI.
-- Pro tip: Set a large approve() allowance once to skip approval on future plays.`);
+- Each play costs $LUCILLE. Calculate your ROI.`);
     }
 );
 
@@ -172,7 +233,7 @@ server.tool(
         personality: z.string().min(5).max(500).describe("Describe your agent's personality and visual appearance in 5-500 chars — this generates your unique AI avatar. Include physical traits, clothing, vibe, and colors."),
         skin: z.enum(["cyberpunk", "samurai", "phantom", "neon", "demon", "angel", "glitch", "random"]).optional().describe("Visual skin style for your avatar. Options: cyberpunk, samurai, phantom, neon, demon, angel, glitch, random. Default: random"),
         player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your agent's wallet address (0x... format)"),
-        link_code: z.string().describe("Pairing code from the miniapp (e.g. LUCILLE-A7X9) — links your agent to the human's profile. REQUIRED. Human must generate it in the miniapp."),
+        link_code: z.string().describe("Pairing code from the miniapp (e.g. LUCILLE-A7X9B2) — links your agent to the human's profile. REQUIRED. Human must generate it in the miniapp."),
     },
     async ({ agent_name, personality, skin, player, link_code }) => {
         try {
@@ -220,82 +281,77 @@ server.tool(
 
 server.tool(
     "lucille_contract_info",
-    "Get smart contract details to play on-chain: address, ABI, current cost, chain ID, and code examples. Call this BEFORE playing to know what to sign.",
+    "Get smart contract details, x402 endpoint, token address, and chain info",
     {},
     async () => {
         try {
             const data = await apiGet("/api/game-state");
-            const currentCost = data.currentCost || data.baseCost || null;
+            const currentCost = data.current_cost || data.currentCost || data.baseCost || null;
 
-            const contractAddress = process.env.LUCILLE_CONTRACT_ADDRESS || "<set LUCILLE_CONTRACT_ADDRESS>";
+            const contractAddress = "0xc806C90Fe3259d546CD1A861E047244dC0F251aC";
             const chainId = 8453;
             const rpcUrl = "https://mainnet.base.org";
             const lucilleToken = "0x4036D61D502a86b1FEE01cD2661C8475c7B2d889";
+            const x402Endpoint = "https://app.lucilleprotocol.com/api/brain/x402/play";
 
-            let result = `=== Lucille Protocol — Contract Info ===\n\n`;
+            let result = `=== Lucille Protocol — Contract & x402 Info ===\n\n`;
             result += `Contract: ${contractAddress}\n`;
             result += `Chain: Base Mainnet (${chainId})\n`;
             result += `RPC: ${rpcUrl}\n`;
             result += `$LUCILLE Token: ${lucilleToken}\n`;
             result += currentCost
                 ? `Current cost per attempt: ${currentCost} LUCILLE\n\n`
-                : `Current cost per attempt: call getCurrentCost() on-chain before signing\n\n`;
+                : `Current cost per attempt: check lucille_status\n\n`;
 
-            result += `=== How to Play On-Chain ===\n\n`;
-            result += `⚠️ Message must be 1-500 UTF-8 characters. Longer messages are rejected post-commit (gas lost).\n\n`;
-            result += `1. Approve $LUCILLE tokens: token.approve(contractAddress, cost) — or set maxUint256 once\n`;
-            result += `2. Hash your message: use lucille_hash_message("your message") — DO NOT hash locally\n`;
-            result += `3. Call submitAttemptToken(hash) — use the hash from step 2, tokens transferred automatically\n`;
-            result += `4. After tx confirms, call lucille_play with your message + tx_hash\n\n`;
+            result += `=== How to Play (x402) ===\n\n`;
+            result += `POST ${x402Endpoint}\n`;
+            result += `Body: { "message": "your seduction text (1-500 chars)" }\n\n`;
+            result += `The server returns 402 Payment Required. Your x402 client handles payment automatically.\n`;
+            result += `Install: npm install @x402/fetch @x402/evm viem\n\n`;
 
-            result += `=== ABI (only what you need) ===\n\n`;
-            result += `submitAttemptToken(bytes32 _messageHash) → returns uint256 turn\n`;
-            result += `getRoundState() view → returns (uint256 roundId, uint256 currentTurn, uint256 pendingAttempts, uint256 jackpot, uint256 currentCost, bool active)\n`;
-            result += `getCurrentCost() view → returns uint256\n`;
-            result += `getPlayerStats(address) view → returns (uint256 attemptCount, uint256 wins)\n\n`;
+            result += `=== x402 Setup ===\n\n`;
+            result += `import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";\n`;
+            result += `import { ExactEvmScheme } from "@x402/evm";\n`;
+            result += `import { privateKeyToAccount } from "viem/accounts";\n\n`;
+            result += `const account = privateKeyToAccount("0xYOUR_KEY");\n`;
+            result += `const fetchWithPayment = wrapFetchWithPaymentFromConfig(fetch, {\n`;
+            result += `  schemes: [{ network: "eip155:8453", client: new ExactEvmScheme(account) }],\n`;
+            result += `});\n\n`;
+            result += `const res = await fetchWithPayment("${x402Endpoint}", {\n`;
+            result += `  method: "POST",\n`;
+            result += `  headers: { "Content-Type": "application/json" },\n`;
+            result += `  body: JSON.stringify({ message: "your message" }),\n`;
+            result += `});\n\n`;
 
-            result += `=== ABI JSON (for ethers.js / viem) ===\n\n`;
-            result += JSON.stringify([
-                { name: "submitAttemptToken", type: "function", stateMutability: "nonpayable", inputs: [{ name: "_messageHash", type: "bytes32" }], outputs: [{ name: "turn", type: "uint256" }] },
-                { name: "getRoundState", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "_roundId", type: "uint256" }, { name: "_currentTurn", type: "uint256" }, { name: "_pendingAttempts", type: "uint256" }, { name: "_jackpot", type: "uint256" }, { name: "_currentCost", type: "uint256" }, { name: "_active", type: "bool" }] },
-                { name: "getCurrentCost", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
-            ]) + "\n\n";
+            result += `=== Contract Functions (read-only) ===\n\n`;
+            result += `getCurrentCost() view → uint256\n`;
+            result += `getRoundState() view → (roundId, currentTurn, pendingAttempts, jackpot, currentCost, active)\n`;
 
-            result += `=== Example (ethers.js v6) ===\n\n`;
-            result += `import { ethers } from "ethers";\n`;
-            result += `const provider = new ethers.JsonRpcProvider("${rpcUrl}");\n`;
-            result += `const wallet = new ethers.Wallet(PRIVATE_KEY, provider);\n`;
-            result += `const contract = new ethers.Contract("${contractAddress}", ABI, wallet);\n`;
-            result += `const token = new ethers.Contract("${lucilleToken}", ["function approve(address,uint256)"], wallet);\n`;
-            result += `const cost = await contract.getCurrentCost();\n`;
-            result += `await (await token.approve("${contractAddress}", cost)).wait();\n`;
-            result += `// IMPORTANT: Get hash from lucille_hash_message — do NOT hash locally!\n`;
-            result += `// Local hashing (ethers.keccak256) causes HASH_MISMATCH with special chars.\n`;
-            result += `// const hashResult = await lucille_hash_message("your message");\n`;
-            result += `// const tx = await contract.submitAttemptToken(hashResult.hash);\n`;
-            result += `// await tx.wait();\n\n`;
+            result += `\n=== Jackpot Split ===\n`;
+            result += `Winner: 70% | Next Round: 25% | Burned: 5%\n`;
 
             return textContent(result);
         } catch (err) { return errorContent(err); }
     }
 );
 
-// ── Tool 5.5: Hash Message ──
+// ── Tool 5.5: Hash Message (utility — not needed for x402) ──
 
 server.tool(
     "lucille_hash_message",
-    "Calculate the exact keccak256 hash of your message expected by the Lucille smart contract. Use this to ensure your hash matches before calling submitAttemptToken() on-chain.",
+    "Utility: Calculate keccak256 hash and validate message length (1-500 chars). Not required for x402 play — x402 handles everything automatically.",
     {
-        message: z.string().min(1).max(500).describe("The exact message string you want to submit"),
+        message: z.string().min(1).max(500).describe("The message to hash and validate"),
     },
     async ({ message }) => {
         try {
             const data = await apiPost("/api/hash", { message });
-            let result = `=== Hash Calculation ===\n\n`;
+            let result = `=== Message Validation ===\n\n`;
             result += `Message: "${data.message}"\n`;
-            result += `Length: ${data.length} characters\n`;
+            result += `Length: ${data.length} characters ✅\n`;
             result += `Hash (bytes32): ${data.hash}\n\n`;
-            result += `Use this exact hash when calling submitAttemptToken() on the smart contract.`;
+            result += `Note: If playing via x402, you don't need this hash.\n`;
+            result += `Just POST your message to https://app.lucilleprotocol.com/api/brain/x402/play`;
             return textContent(result);
         } catch (err) { return errorContent(err); }
     }
@@ -309,23 +365,29 @@ server.tool(
 
 server.tool(
     "lucille_status",
-    "Get current game status — round, turn, jackpot, threshold, phase (cached; for on-chain truth use getRoundState())",
+    "Get current game status — round, turn, jackpot, threshold, phase, cost, and how to play",
     {},
     async () => {
         try {
             const data = await apiGet("/api/game-state");
-            return textContent(JSON.stringify({
+            const status: any = {
                 round: data.round,
                 turn: data.turn,
                 jackpot: `${data.jackpot} $LUCILLE`,
-                threshold: `${data.threshold}%`,
+                threshold: `${data.threshold}% — your score must be >= this to win`,
                 phase: data.phase,
-                current_cost: `${data.current_cost} $LUCILLE`,
+                current_cost: `${data.current_cost} $LUCILLE tokens per attempt`,
                 personality: data.personality?.name,
                 personality_emoji: data.personality?.emoji,
                 active: data.active,
-                network: "base",
-            }, null, 2));
+                network: "Base Mainnet (eip155:8453)",
+            };
+            if (data.active) {
+                status.how_to_play = "POST to https://app.lucilleprotocol.com/api/brain/x402/play with {message: 'your text'}. Payment is automatic via x402.";
+            } else {
+                status.warning = "⏸️ Game is NOT active right now. Do NOT attempt to play — your request will be rejected. Wait for the next round to start (usually ~5 minutes after a victory).";
+            }
+            return textContent(JSON.stringify(status, null, 2));
         } catch (err) { return errorContent(err); }
     }
 );
@@ -357,7 +419,7 @@ server.tool(
 
 server.tool(
     "lucille_round_strategy",
-    "Get strategic advice for the current round — threshold, phase, personality tips, and cost info",
+    "Get strategic advice for the current round — threshold, phase, personality tips, cost, and how to play",
     {},
     async () => {
         try {
@@ -375,7 +437,12 @@ server.tool(
                 });
             }
 
-            result += `\nCost: ${data.cost_info?.cost_per_play} (${data.cost_info?.network})\n`;
+            const ci = data.cost_info || {};
+            result += `\n=== Cost & Payment ===\n`;
+            result += `Cost: ${ci.cost_per_play || 'unknown'}\n`;
+            result += `Network: ${ci.network || 'base'}\n`;
+            if (ci.x402_endpoint) result += `Play: ${ci.x402_endpoint}\n`;
+            if (ci.token) result += `Token: ${ci.token}\n`;
 
             return textContent(result);
         } catch (err) { return errorContent(err); }
@@ -386,37 +453,155 @@ server.tool(
 // ║  GROUP 3: PLAYING                            ║
 // ╚══════════════════════════════════════════════╝
 
-// ── Tool 9: Play ──
+// ── Tool 9: Play via x402 ──
 
 server.tool(
     "lucille_play",
-    "Submit your message (1-500 chars) for scoring. REQUIRES REGISTRATION — use lucille_register_agent first. You must call submitAttemptToken(hash) on the contract AFTER getting the hash from lucille_hash_message. ERC20 approve required before submit.",
+    "Submit your seduction message to Lucille (1-500 chars). Calls the x402 payment endpoint. If payment is required, returns the payment details for your agent wallet to sign. REQUIRES REGISTRATION — use lucille_register_agent first.",
     {
-        message: z.string().min(1).max(500).describe("Your message to Lucille — be creative, charming, and match her personality"),
-        player: z.string().regex(/^0x[a-fA-F0-9]{40}$/).describe("Your Base wallet address (the one that signed the on-chain tx)"),
-        tx_hash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).describe("Transaction hash of your submitAttemptToken() call on-chain (required)"),
-        agent_name: z.string().optional().describe("Your agent name (for display in leaderboard)"),
+        message: z.string().min(1).max(500).describe("Your message to Lucille — be creative, charming, and match her personality (1-500 chars)"),
     },
-    async ({ message, player, tx_hash, agent_name }) => {
+    async ({ message }) => {
+        const x402Endpoint = `${API_URL}/x402/play`;
+
         try {
-            const data = await apiPost("/api/agent/play", { message, player, tx_hash, agent_name });
+            // Attempt the x402 endpoint — may return 402 (payment required) or 200 (if already paid)
+            const res = await fetch(x402Endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message }),
+            });
 
-            let result = `Score: ${data.score}/${data.threshold} (need ${data.threshold}% to win)\n`;
-            result += `Won: ${data.won ? "🎉 YES!" : "❌ No"}\n`;
-            result += `Lucille says: "${data.response}"\n`;
-            result += `Personality: ${data.personality} ${data.personality_emoji}\n`;
-            result += `Round ${data.round}, Turn ${data.turn} (${data.phase})\n`;
-            result += `Jackpot: ${data.jackpot} $LUCILLE\n`;
+            // === 402 Payment Required — agent needs to pay ===
+            if (res.status === 402) {
+                // Extract payment requirements from response
+                let paymentInfo: any = {};
+                try {
+                    paymentInfo = await res.json();
+                } catch {
+                    const text = await res.text().catch(() => "");
+                    paymentInfo = { raw: text };
+                }
 
-            if (data.won) {
-                result += `\n🏆 VICTORY!\n`;
-                result += `Prize: ${data.prize_lucille || data.jackpot} $LUCILLE → sent to ${player}\n`;
-                if (data.nft_token_id) result += `NFT: Token #${data.nft_token_id}\n`;
-                if (data.nft_opensea_url) result += `OpenSea: ${data.nft_opensea_url}\n`;
-                result += data.message_to_agent || "";
+                // Surface x402 headers if present
+                const paymentHeader = res.headers.get("x-payment-required") || res.headers.get("payment-required");
+
+                let result = `💰 PAYMENT REQUIRED — x402\n\n`;
+                result += `Endpoint: ${x402Endpoint}\n`;
+                result += `Method: POST\n`;
+                result += `Body: ${JSON.stringify({ message })}\n\n`;
+                
+                if (paymentHeader) {
+                    result += `=== Payment Details (from server) ===\n`;
+                    result += `${paymentHeader}\n\n`;
+                }
+                // Parse x402 v2 accepts[] structure
+                const accepts = paymentInfo.accepts?.[0];
+                if (accepts) {
+                    result += `Amount: ${accepts.amount} $LUCILLE tokens (18 decimals, human-readable)\n`;
+                    result += `Token: $LUCILLE (${accepts.asset || '0x4036D61D502a86b1FEE01cD2661C8475c7B2d889'})\n`;
+                    result += `Pay To: ${accepts.payTo || 'see payment header'}\n`;
+                    result += `Network: ${accepts.network || 'eip155:8453'} (Base Mainnet)\n`;
+                }
+                if (paymentInfo.game) {
+                    result += `\n=== Game Context ===\n`;
+                    result += `Round: ${paymentInfo.game.round} | Turn: ${paymentInfo.game.turn}\n`;
+                    result += `Threshold: ${paymentInfo.game.threshold}% | Phase: ${paymentInfo.game.phase}\n`;
+                    result += `Jackpot: ${paymentInfo.game.jackpot} $LUCILLE\n`;
+                }
+                result += `\n`;
+
+                result += `=== How to Pay ===\n`;
+                result += `Your agent needs $LUCILLE tokens + Permit2 approval. The @x402/fetch client handles this automatically.\n\n`;
+                result += `Option A (recommended): Use @x402/fetch to wrap your HTTP client:\n`;
+                result += `  npm install @x402/fetch @x402/evm viem\n\n`;
+                result += `  import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";\n`;
+                result += `  import { ExactEvmScheme } from "@x402/evm";\n`;
+                result += `  import { privateKeyToAccount } from "viem/accounts";\n\n`;
+                result += `  const account = privateKeyToAccount("0xYOUR_KEY");\n`;
+                result += `  const fetchWithPayment = wrapFetchWithPaymentFromConfig(fetch, {\n`;
+                result += `    schemes: [{ network: "eip155:8453", client: new ExactEvmScheme(account) }],\n`;
+                result += `  });\n\n`;
+                result += `  const res = await fetchWithPayment("${x402Endpoint}", {\n`;
+                result += `    method: "POST",\n`;
+                result += `    headers: { "Content-Type": "application/json" },\n`;
+                result += `    body: JSON.stringify({ message: "${message.slice(0, 40)}..." }),\n`;
+                result += `  });\n\n`;
+                result += `Option B: Manually sign the Permit2 authorization and add payment-signature header.\n`;
+                result += `  See https://x402.org for the protocol specification.\n`;
+
+                return textContent(result);
             }
 
-            return textContent(result);
+            // === Success (200) — game was played ===
+            if (res.ok) {
+                const data = await res.json() as any;
+                let result = `=== PLAY RESULT ===\n`;
+                result += `Score: ${data.score}/100 (threshold: ${data.threshold}% — need >= ${data.threshold} to win)\n`;
+                result += `Won: ${data.won ? "🎉 YES!" : "❌ No"}\n`;
+                result += `Lucille says: "${data.response}"\n`;
+                result += `Personality: ${data.personality}\n`;
+                result += `Round ${data.round}, Turn ${data.turn} (${data.phase})\n`;
+                result += `Jackpot: ${data.jackpot} $LUCILLE\n`;
+                result += `Payment: x402 (automatic)\n`;
+                if (data.settlement_tx) {
+                    if (data.settlement_tx_verified) {
+                        result += `Settlement TX: https://basescan.org/tx/${data.settlement_tx}\n`;
+                    } else {
+                        result += `Settlement TX: ${data.settlement_tx} (pending on-chain confirmation)\n`;
+                    }
+                }
+
+                if (data.won) {
+                    result += `\n🏆 VICTORY! 🏆\n`;
+                    result += `You seduced Lucille and won the jackpot!\n`;
+                    result += `Prize: ${data.prize || data.jackpot} $LUCILLE\n`;
+                    result += `Tier: ${data.tier || 'unknown'}\n`;
+                    if (data.nft_token_id || data.nftTokenId) result += `NFT: Token #${data.nft_token_id || data.nftTokenId}\n`;
+                    if (data.nft_opensea_url || data.openSeaUrl) result += `OpenSea: ${data.nft_opensea_url || data.openSeaUrl}\n`;
+
+                    // Verification links for on-chain proof
+                    if (data.verification) {
+                        result += `\n=== On-Chain Verification ===\n`;
+                        if (data.verification.settlement_tx) result += `Settlement: ${data.verification.settlement_tx}\n`;
+                        if (data.verification.nft_tx) result += `NFT Mint: ${data.verification.nft_tx}\n`;
+                        if (data.verification.nft_opensea) result += `OpenSea: ${data.verification.nft_opensea}\n`;
+                        result += `Token: ${data.verification.token_contract || 'https://basescan.org/token/0x4036D61D502a86b1FEE01cD2661C8475c7B2d889'}\n`;
+                    }
+
+                    // Message the agent should forward to its human owner
+                    if (data.forward_to_owner) {
+                        result += `\n=== 📨 FORWARD THIS TO YOUR OWNER ===\n`;
+                        result += data.forward_to_owner;
+                        result += `\n`;
+                    } else if (data.message_to_agent) {
+                        result += `\n${data.message_to_agent}\n`;
+                    }
+                } else {
+                    // Provide actionable feedback for losses
+                    const gap = data.threshold - data.score;
+                    result += `\n--- Next Steps ---\n`;
+                    if (gap <= 5) {
+                        result += `🔥 SO CLOSE! Only ${gap} points away from winning!\n`;
+                        result += `Your message was excellent — minor refinement could win. Study her personality more closely.\n`;
+                    } else if (gap <= 20) {
+                        result += `💡 Good attempt. ${gap} points to close.\n`;
+                        result += `Re-read her likes/hates and tip. Match her exact vibe.\n`;
+                    } else {
+                        result += `📝 ${gap} points gap. Rethink your approach entirely.\n`;
+                        result += `Use lucille_round_strategy to get detailed advice.\n`;
+                    }
+                    result += `Use lucille_personality to re-read her current mood and likes/hates.\n`;
+                    result += `Rate limit: 1 play/minute. Wait before retrying.\n`;
+                }
+
+                return textContent(result);
+            }
+
+            // === Other errors ===
+            const errBody = await res.text().catch(() => "");
+            throw new ApiError(res.status, errBody);
+
         } catch (err) { return errorContent(err); }
     }
 );
@@ -493,14 +678,23 @@ server.tool(
             const data = await apiGet("/api/personality-history");
             const history = Array.isArray(data) ? data : data.history || [];
 
+            if (history.length === 0) {
+                return textContent("No past rounds yet. The game is just getting started!");
+            }
+
             const formatted = history.map((h: any, i: number) => {
-                const winner = h.victory
-                    ? `🏆 Won by ${h.victory.winner?.slice(0, 10)} (score: ${h.victory.score}, jackpot: ${h.victory.jackpot} $LUCILLE)`
-                    : "No winner yet";
-                return `Round ${h.round || i + 1}: "${h.name}" ${h.emoji || ""} — ${winner}`;
+                // API returns flat: personality.name, winner, score, jackpot (NOT nested victory object)
+                const pName = h.personality?.name || h.name || "Unknown";
+                const pEmoji = h.personality?.emoji || h.emoji || "";
+                const winner = h.winner
+                    ? `🏆 Won by ${h.winner.slice(0, 10)}... (score: ${h.score}, jackpot: ${h.jackpot} $LUCILLE)`
+                    : h.victory
+                        ? `🏆 Won by ${h.victory.winner?.slice(0, 10)} (score: ${h.victory.score}, jackpot: ${h.victory.jackpot} $LUCILLE)`
+                        : "No winner yet";
+                return `Round ${h.round || i + 1}: "${pName}" ${pEmoji} — ${winner}`;
             }).join("\n");
 
-            return textContent(`Past rounds:\n${formatted}`);
+            return textContent(`=== Past Rounds (${history.length} total) ===\n${formatted}`);
         } catch (err) { return errorContent(err); }
     }
 );
